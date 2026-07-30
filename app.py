@@ -7,10 +7,12 @@ import asyncio
 import base64
 import json
 import os
+import ssl
 import time
 from pathlib import Path
 from typing import Any
 
+import certifi
 import uvicorn
 import websockets
 from dotenv import load_dotenv
@@ -22,7 +24,19 @@ from pydantic import BaseModel, Field
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 
-XAI_API_KEY = os.getenv("XAI_API_KEY", "").strip()
+def _normalize_api_key(raw: str) -> str:
+    """Treat placeholders from .env.example as unset."""
+    key = (raw or "").strip().strip('"').strip("'")
+    if not key:
+        return ""
+    if key in {"xai-...", "xai-", "your-key-here", "CHANGEME"}:
+        return ""
+    if key.endswith("...") and len(key) < 20:
+        return ""
+    return key
+
+
+XAI_API_KEY = _normalize_api_key(os.getenv("XAI_API_KEY", ""))
 MODEL = os.getenv("XAI_VOICE_MODEL", "grok-voice-think-fast-2.0").strip()
 VOICE = os.getenv("XAI_VOICE", "eve").strip()
 HOST = os.getenv("HOST", "127.0.0.1")
@@ -33,6 +47,9 @@ HEADER_DST = STATIC_DIR / "header.jpg"
 PROMPTS_PATH = ROOT / "data" / "prompts.json"
 DEMO_PATH = ROOT / "data" / "demo-session.json"
 REALTIME_URL = f"wss://api.x.ai/v1/realtime?model={MODEL}"
+
+# macOS Python installs often lack system CA roots; pin certifi for WSS.
+SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
 
 app = FastAPI(title="Grok Voice Think Fast 2.0 Live Lab")
 
@@ -97,6 +114,11 @@ def _friendly_error(
             "message": "Network or TLS failed while connecting to api.x.ai.",
             "fix": "Check internet, proxy, VPN, then retry Connect.",
         },
+        "ssl_cert": {
+            "title": "TLS certificate problem",
+            "message": "Python could not verify HTTPS/WSS certificates (common on macOS).",
+            "fix": "pip install -U certifi  # lab uses certifi CA bundle automatically after restart",
+        },
         "timeout": {
             "title": "Timed out waiting for audio",
             "message": "The Realtime session opened but no complete response arrived in time.",
@@ -144,6 +166,8 @@ def _classify_exception(exc: Exception) -> dict[str, Any]:
     low = text.lower()
     if "401" in text or "unauthorized" in low or "invalid api" in low:
         return _friendly_error("invalid_key", text)
+    if "certificate_verify_failed" in low or "ssl" in low and "certificate" in low:
+        return _friendly_error("ssl_cert", text)
     if "403" in text or "permission" in low or "not available" in low or "model" in low and "access" in low:
         return _friendly_error("model_access", text)
     if "timed out" in low or "timeout" in low:
@@ -231,6 +255,7 @@ async def _speak_once(
             additional_headers=headers,
             open_timeout=20,
             max_size=16 * 1024 * 1024,
+            ssl=SSL_CONTEXT,
         ) as xai_ws:
             await xai_ws.send(
                 json.dumps(
@@ -468,6 +493,7 @@ async def _proxy_realtime(client_ws: WebSocket) -> None:
             max_size=16 * 1024 * 1024,
             ping_interval=20,
             ping_timeout=20,
+            ssl=SSL_CONTEXT,
         ) as upstream:
 
             async def client_to_upstream() -> None:
