@@ -179,13 +179,18 @@ def health() -> dict[str, Any]:
         "features": [
             "live-session",
             "streaming-audio",
+            "push-to-talk",
+            "audio-worklet",
             "mic-vad",
+            "tool-calls",
+            "session-export",
             "multi-turn",
             "scenarios",
             "one-shot-speak",
             "offline-demo",
             "reasoning-compare",
             "friendly-errors",
+            "docker",
         ],
     }
 

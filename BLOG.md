@@ -176,15 +176,16 @@ This repository ships an **interactive live lab** (not just a one-shot button):
 
 1. **Persistent Realtime session** against **`grok-voice-think-fast-2.0`**
 2. **Streaming playback** as audio deltas arrive (hear it think-while-speaking)
-3. **Mic + server VAD** for auto turn-taking, plus barge-in / interrupt
-4. **Multi-turn chat log**, scenario personas, and live `session.update` (voice / reasoning / instructions)
-5. **Per-turn latency** (send → first audio) with a sparkline vs the **0.70s** lab reference
+3. **Push-to-talk** (hold Space) or open mic + server VAD — AudioWorklet → 24 kHz PCM
+4. **Tool calls** (`lookup_order` fake CRM + optional `web_search`) with chips in the transcript
+5. **Export session** JSON (transcript + latency + tools) for article figures
+6. **Compare high vs none**, offline Demo mode, Docker Compose
 
 ```bash
 python app.py
+# or: docker compose up --build
 # open http://127.0.0.1:7861 → Demo mode (no key)
-# optional: set XAI_API_KEY → Connect for live voice
-# try: Compare high vs none
+# optional: set XAI_API_KEY → Connect → hold Space to talk
 ```
 
 The goal is the same as the Nemotron embed “wow” demos: prove the claim in a browser in under a minute — offline first, live when you have a key.

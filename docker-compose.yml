@@ -1,0 +1,16 @@
+services:
+  lab:
+    build: .
+    ports:
+      - "${PORT:-7861}:7861"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "7861"
+      # Pass through from host env or a local .env (Compose auto-loads .env for substitution)
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      XAI_VOICE_MODEL: ${XAI_VOICE_MODEL:-grok-voice-think-fast-2.0}
+      XAI_VOICE: ${XAI_VOICE:-eve}
+    # Demo mode works with no key:
+    #   docker compose up --build
+    # Live voice:
+    #   echo 'XAI_API_KEY=xai-...' > .env && docker compose up --build

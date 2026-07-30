@@ -562,3 +562,75 @@ footer a {
 .chat-head h2 {
   margin-right: auto;
 }
+
+button.ptt.active-mic,
+button.ptt:active {
+  border-color: rgba(52, 211, 153, 0.7);
+  color: var(--good);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.2) inset;
+  transform: scale(0.98);
+}
+
+.ptt-hint {
+  margin: -4px 0 12px;
+}
+
+kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  background: #0b0d13;
+  color: var(--text);
+}
+
+.check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.check input {
+  margin-top: 3px;
+}
+
+.tools-field label.check span code {
+  font-size: 12px;
+}
+
+.msg.tool {
+  align-self: center;
+  max-width: min(640px, 96%);
+  background: rgba(167, 139, 250, 0.08);
+  border-color: rgba(167, 139, 250, 0.35);
+}
+
+.tool-chip {
+  display: inline-flex;
+  margin-bottom: 6px;
+}
+
+.tool-name {
+  display: inline-block;
+  background: rgba(167, 139, 250, 0.18);
+  border: 1px solid rgba(167, 139, 250, 0.4);
+  color: #c4b5fd;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.tool-body {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: pre-wrap;
+}

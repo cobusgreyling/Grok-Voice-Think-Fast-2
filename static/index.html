@@ -13,9 +13,8 @@
       <p class="eyebrow">xAI · Interactive Speech-to-Speech Lab</p>
       <h1>Grok Voice Think Fast 2.0</h1>
       <p class="sub">
-        Live multi-turn session. Stream audio as it thinks.
-        No API key? Use <strong>Demo mode</strong>. Want the product claim?
-        Run <strong>Compare high vs none</strong>.
+        Live multi-turn session with push-to-talk, tool calls, and session export.
+        No API key? Use <strong>Demo mode</strong>.
       </p>
       <div class="badges">
         <span class="badge">model: <code id="modelName">…</code></span>
@@ -56,18 +55,31 @@
         <button id="connectBtn" type="button">Connect</button>
         <button id="demoBtn" type="button" class="ghost">▶ Demo mode</button>
         <button id="compareBtn" type="button" class="ghost">⚖ Compare high vs none</button>
-        <button id="micBtn" type="button" class="ghost" disabled title="Requires live session">
-          🎙 Mic off
+        <button
+          id="pttBtn"
+          type="button"
+          class="ghost ptt"
+          disabled
+          title="Hold to talk (also hold Space when not typing)"
+        >
+          🎙 Hold to talk
+        </button>
+        <button id="micBtn" type="button" class="ghost" disabled title="Open mic (server VAD)">
+          🎙 Open mic
         </button>
         <button id="interruptBtn" type="button" class="ghost" disabled>Interrupt</button>
+        <button id="exportBtn" type="button" class="ghost" disabled>⬇ Export</button>
         <button id="clearBtn" type="button" class="ghost" disabled>Clear chat</button>
       </div>
+      <p class="hint tight ptt-hint" id="pttHint">
+        Push-to-talk: hold <kbd>Space</kbd> or the button (best for noisy rooms). Open mic uses server VAD.
+      </p>
 
       <div class="composer">
         <textarea
           id="prompt"
           rows="3"
-          placeholder="Type a message… Enter to send · Shift+Enter for newline"
+          placeholder="Type a message… Enter to send · Shift+Enter for newline · Space = PTT when not typing"
         ></textarea>
         <div class="composer-actions">
           <button id="sendBtn" type="button" disabled>Send</button>
@@ -100,23 +112,36 @@
           </select>
         </div>
         <div class="field">
-          <label for="vad">Turn detection</label>
-          <select id="vad">
-            <option value="server_vad" selected>server VAD (auto)</option>
-            <option value="manual">manual (text / push-to-talk commit)</option>
+          <label for="micMode">Mic mode</label>
+          <select id="micMode">
+            <option value="ptt" selected>push-to-talk (hold Space)</option>
+            <option value="open">open mic (server VAD)</option>
           </select>
+        </div>
+        <div class="field tools-field">
+          <label>Tools (agentic demo)</label>
+          <label class="check">
+            <input type="checkbox" id="toolLookup" checked />
+            <span><code>lookup_order</code> (local fake CRM)</span>
+          </label>
+          <label class="check">
+            <input type="checkbox" id="toolWeb" />
+            <span><code>web_search</code> (server-side)</span>
+          </label>
         </div>
         <div class="field">
           <label for="instructions">System instructions</label>
           <textarea id="instructions" rows="5">You are a sharp, concise voice assistant demoing Grok Voice Think Fast 2.0.
 Prefer short sentences. Ask one question at a time. No fluff.
-When the user role-plays a customer, stay in character as a helpful agent.</textarea>
+When the user asks about an order, use the lookup_order tool before answering.
+When web_search is available and they ask for current facts, use it.</textarea>
         </div>
         <button id="applySessionBtn" type="button" class="ghost full" disabled>
           Apply settings to live session
         </button>
         <p class="hint tight">
-          Demo mode needs no key. Live Connect needs <code>XAI_API_KEY</code> in <code>.env</code>.
+          Demo mode needs no key. Live Connect needs <code>XAI_API_KEY</code>.
+          Mic uses <strong>AudioWorklet</strong> → 24&nbsp;kHz PCM.
         </p>
       </section>
 
@@ -144,7 +169,7 @@ When the user role-plays a customer, stay in character as a helpful agent.</text
           <canvas id="spark" width="400" height="56" aria-label="Latency history"></canvas>
         </div>
         <p class="hint tight">
-          Lab TTFA for 2.0 is <strong>0.70s</strong>. Your numbers include network + session.
+          Lab TTFA for 2.0 is <strong>0.70s</strong>. Export JSON for article figures.
         </p>
       </section>
 
