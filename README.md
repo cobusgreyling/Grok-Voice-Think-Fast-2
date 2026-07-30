@@ -1,4 +1,4 @@
-# Grok Voice Think Fast 2.0 — Live Lab
+# Grok Voice Think Fast 2.0 // Live Lab
 
 Interactive article companion for **xAI Grok Voice Think Fast 2.0** — a persistent speech-to-speech session you can drive with text, mic, and scenario chips.
 
