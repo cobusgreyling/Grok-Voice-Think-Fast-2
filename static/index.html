@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Grok Voice Think Fast 2.0</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="hero">
+    <img src="/static/header.jpg" alt="Grok Voice Think Fast 2.0" class="banner" onerror="this.style.display='none'" />
+    <div class="hero-copy">
+      <p class="eyebrow">xAI · Speech-to-Speech</p>
+      <h1>Grok Voice Think Fast 2.0</h1>
+      <p class="sub">
+        Reasons while it speaks. <strong>0.70s</strong> first audio.
+        Better transcription, sharper conversation, fewer reasoning tokens.
+      </p>
+      <div class="badges">
+        <span class="badge">model: <code id="modelName">…</code></span>
+        <span class="badge" id="keyStatus">checking key…</span>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <div class="row">
+        <label for="voice">Voice</label>
+        <select id="voice">
+          <option value="eve">eve</option>
+          <option value="ara">ara</option>
+          <option value="rex">rex</option>
+          <option value="sal">sal</option>
+          <option value="leo">leo</option>
+        </select>
+
+        <label for="reasoning">Reasoning</label>
+        <select id="reasoning">
+          <option value="high" selected>high</option>
+          <option value="none">none</option>
+        </select>
+      </div>
+
+      <label for="prompt">Say something (text → speech turn)</label>
+      <textarea id="prompt" rows="5" placeholder="Ask a multi-step question…"></textarea>
+
+      <div class="examples" id="examples"></div>
+
+      <div class="actions">
+        <button id="speakBtn" type="button">Speak</button>
+        <button id="stopBtn" type="button" class="ghost" disabled>Stop audio</button>
+      </div>
+    </section>
+
+    <section class="panel metrics">
+      <h2>Latency</h2>
+      <div class="metric-grid">
+        <div>
+          <div class="metric-label">Connect → first audio</div>
+          <div class="metric-value" id="mFirst">—</div>
+        </div>
+        <div>
+          <div class="metric-label">Connect → done</div>
+          <div class="metric-value" id="mDone">—</div>
+        </div>
+        <div>
+          <div class="metric-label">Audio duration</div>
+          <div class="metric-value" id="mDur">—</div>
+        </div>
+      </div>
+      <p class="hint">
+        xAI reports <strong>0.70s</strong> time-to-first-audio on Artificial Analysis for Think Fast 2.0
+        (vs 1.25s on 1.0). Your local number includes network + cold session setup.
+      </p>
+    </section>
+
+    <section class="panel">
+      <h2>Transcript</h2>
+      <pre id="transcript" class="transcript">Waiting for a response…</pre>
+      <div id="status" class="status"></div>
+    </section>
+  </main>
+
+  <footer>
+    <a href="https://x.ai/news/grok-voice-think-fast-2" target="_blank" rel="noopener">Announcement</a>
+    ·
+    <a href="https://docs.x.ai/developers/model-capabilities/audio/voice-agent" target="_blank" rel="noopener">Docs</a>
+    ·
+    <a href="/static/../" hidden></a>
+    <span>Companion demo for the article in <code>BLOG.md</code></span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

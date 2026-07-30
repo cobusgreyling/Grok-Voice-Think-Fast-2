@@ -1,0 +1,20 @@
+{
+  "examples": [
+    {
+      "label": "Multi-step reasoning",
+      "text": "I have three meetings: 9am, 11:30am, and 3pm. Each is 45 minutes. Can I fit a 90-minute deep-work block before lunch without overlapping anything? Walk me through it briefly."
+    },
+    {
+      "label": "Tool-style workflow",
+      "text": "Act as a support agent. A customer says their order 88421 never arrived, they paid on the 12th, and they want either a reship or a refund. Ask one clarifying question at a time."
+    },
+    {
+      "label": "Noisy real world",
+      "text": "I'm calling from a train. My account is under Greyling, number ends 4491. I need to change the delivery address to 18 Harbor Road, Cape Town. Confirm what you heard."
+    },
+    {
+      "label": "Short & human",
+      "text": "In one short sentence, what makes Think Fast 2.0 different from older voice models?"
+    }
+  ]
+}
