@@ -10,6 +10,8 @@ const els = {
   connStatus: $("connStatus"),
   turnStatus: $("turnStatus"),
   connectBtn: $("connectBtn"),
+  demoBtn: $("demoBtn"),
+  compareBtn: $("compareBtn"),
   micBtn: $("micBtn"),
   interruptBtn: $("interruptBtn"),
   clearBtn: $("clearBtn"),
@@ -28,6 +30,7 @@ const els = {
   eventLog: $("eventLog"),
   toggleLogBtn: $("toggleLogBtn"),
   liveDot: $("liveDot"),
+  demoDot: $("demoDot"),
   stageHint: $("stageHint"),
   orb: $("orb"),
   orbCore: $("orbCore"),
@@ -37,6 +40,21 @@ const els = {
   mDone: $("mDone"),
   mTurns: $("mTurns"),
   mAvg: $("mAvg"),
+  errorBanner: $("errorBanner"),
+  errorTitle: $("errorTitle"),
+  errorMessage: $("errorMessage"),
+  errorFix: $("errorFix"),
+  errorDemoBtn: $("errorDemoBtn"),
+  errorDismissBtn: $("errorDismissBtn"),
+  comparePanel: $("comparePanel"),
+  compareNote: $("compareNote"),
+  compareDelta: $("compareDelta"),
+  cmpHighFirst: $("cmpHighFirst"),
+  cmpNoneFirst: $("cmpNoneFirst"),
+  cmpHighText: $("cmpHighText"),
+  cmpNoneText: $("cmpNoneText"),
+  cmpPlayHigh: $("cmpPlayHigh"),
+  cmpPlayNone: $("cmpPlayNone"),
 };
 
 /** @type {WebSocket | null} */
@@ -51,19 +69,24 @@ let micProcessor = null;
 let micSource = null;
 let micEnabled = false;
 let connected = false;
+let demoMode = false;
 let speaking = false;
 let awaitingResponse = false;
 let turnStartMs = null;
 let firstAudioMs = null;
 let turnCount = 0;
+let keyConfigured = false;
+let demoAvailable = true;
 const latencyHistory = [];
+/** @type {any} */
+let demoBundle = null;
+/** @type {any} */
+let lastCompare = null;
 
-/** streaming playback */
 let nextPlayTime = 0;
 /** @type {AudioBufferSourceNode[]} */
 const activeSources = [];
 
-/** chat partials */
 let partialAssistantEl = null;
 let partialUserEl = null;
 let partialAssistantText = "";
@@ -73,6 +96,99 @@ const waveCtx = els.wave.getContext("2d");
 const sparkCtx = els.spark.getContext("2d");
 const waveLevels = new Float32Array(64);
 let waveWrite = 0;
+
+// ---------------------------------------------------------------------------
+// Friendly errors
+// ---------------------------------------------------------------------------
+
+function showFriendlyError(err) {
+  const parsed = normalizeError(err);
+  els.errorBanner.hidden = false;
+  els.errorTitle.textContent = parsed.title;
+  els.errorMessage.textContent = parsed.message;
+  els.errorFix.textContent = parsed.fix || "";
+  els.errorFix.hidden = !parsed.fix;
+  setStatus(`${parsed.title}: ${parsed.message}`, "error");
+  logEvent(`error ${parsed.code || "?"} — ${parsed.message}`);
+}
+
+function hideFriendlyError() {
+  els.errorBanner.hidden = true;
+}
+
+function normalizeError(err) {
+  if (!err) {
+    return {
+      code: "generic",
+      title: "Something went wrong",
+      message: "Unknown error",
+      fix: "Try Demo mode, then retry.",
+    };
+  }
+  if (typeof err === "string") {
+    return classifyClientString(err);
+  }
+  // FastAPI {detail: {...}} or {detail: "str"}
+  const detail = err.detail ?? err.error ?? err;
+  if (typeof detail === "string") return classifyClientString(detail);
+  if (detail && typeof detail === "object" && (detail.title || detail.message || detail.code)) {
+    return {
+      code: detail.code || "generic",
+      title: detail.title || "Error",
+      message: detail.message || detail.raw || JSON.stringify(detail),
+      fix: detail.fix || "",
+    };
+  }
+  if (err.message) return classifyClientString(err.message);
+  return {
+    code: "generic",
+    title: "Something went wrong",
+    message: JSON.stringify(err).slice(0, 300),
+    fix: "Try Demo mode, then retry.",
+  };
+}
+
+function classifyClientString(text) {
+  const low = String(text).toLowerCase();
+  if (low.includes("xai_api_key") || low.includes("not configured") || low.includes("missing_key")) {
+    return {
+      code: "missing_key",
+      title: "API key not configured",
+      message: "No XAI_API_KEY on the server. Use Demo mode without a key, or add one.",
+      fix: "cp .env.example .env  # then set XAI_API_KEY=xai-… from console.x.ai",
+    };
+  }
+  if (low.includes("notallowederror") || low.includes("permission denied") || low.includes("microphone")) {
+    return {
+      code: "mic_denied",
+      title: "Microphone blocked",
+      message: "The browser denied mic access.",
+      fix: "Allow microphone for this site, or use text chat / Demo mode.",
+    };
+  }
+  if (low.includes("failed to fetch") || low.includes("networkerror")) {
+    return {
+      code: "network",
+      title: "Could not reach the lab server",
+      message: "Is `python app.py` running on port 7861?",
+      fix: "./run.sh   # then open http://127.0.0.1:7861",
+    };
+  }
+  return {
+    code: "generic",
+    title: "Something went wrong",
+    message: String(text),
+    fix: "Try Demo mode to confirm the UI, then retry with a key.",
+  };
+}
+
+async function readErrorBody(res) {
+  try {
+    return await res.json();
+  } catch {
+    return { detail: res.statusText || `HTTP ${res.status}` };
+  }
+}
 
 // ---------------------------------------------------------------------------
 // UI helpers
@@ -87,6 +203,7 @@ function setConn(state) {
   els.connStatus.textContent = state;
   els.connStatus.classList.remove("ok", "bad", "live", "warn");
   if (state === "connected") els.connStatus.classList.add("live");
+  else if (state === "demo") els.connStatus.classList.add("warn");
   else if (state === "connecting") els.connStatus.classList.add("warn");
   else if (state === "error") els.connStatus.classList.add("bad");
 }
@@ -104,7 +221,7 @@ function setTurn(state) {
     els.orb.classList.add("thinking");
     els.orbCore.textContent = "…";
   } else {
-    els.orbCore.textContent = connected ? "●" : "○";
+    els.orbCore.textContent = connected || demoMode ? "●" : "○";
   }
 }
 
@@ -128,25 +245,59 @@ function ensureAudioCtx() {
   return audioCtx;
 }
 
-function setConnectedUi(isOn) {
+function setLiveUi(isOn) {
   connected = isOn;
+  if (isOn) demoMode = false;
   els.liveDot.hidden = !isOn;
+  if (isOn) els.demoDot.hidden = true;
   els.connectBtn.textContent = isOn ? "Disconnect" : "Connect";
-  els.prompt.disabled = !isOn;
-  els.sendBtn.disabled = !isOn;
+  els.sendBtn.disabled = !(isOn || demoMode);
   els.micBtn.disabled = !isOn;
   els.interruptBtn.disabled = !isOn;
-  els.clearBtn.disabled = !isOn;
+  els.clearBtn.disabled = !(isOn || demoMode);
   els.applySessionBtn.disabled = !isOn;
-  els.stageHint.textContent = isOn
-    ? "Session live — type, use a scenario, or enable the mic."
-    : "Connect to start a persistent Realtime conversation.";
-  if (!isOn) {
-    setConn("disconnected");
-    setTurn("idle");
-  } else {
+  els.demoBtn.disabled = isOn;
+  if (isOn) {
     setConn("connected");
     setTurn(micEnabled ? "listening" : "idle");
+    els.stageHint.textContent = "Session live — type, use a scenario, or enable the mic.";
+  } else if (!demoMode) {
+    setConn("disconnected");
+    setTurn("idle");
+    els.stageHint.textContent = keyConfigured
+      ? "Connect with your key, or start Demo mode offline."
+      : "No API key detected — start Demo mode, or add XAI_API_KEY.";
+  }
+}
+
+function setDemoUi(isOn) {
+  demoMode = isOn;
+  if (isOn) {
+    connected = false;
+    els.liveDot.hidden = true;
+    els.demoDot.hidden = false;
+    els.connectBtn.textContent = "Connect";
+    els.sendBtn.disabled = false;
+    els.clearBtn.disabled = false;
+    els.micBtn.disabled = true;
+    els.interruptBtn.disabled = true;
+    els.applySessionBtn.disabled = true;
+    els.demoBtn.textContent = "■ Stop demo";
+    setConn("demo");
+    setTurn("idle");
+    els.stageHint.textContent = "Demo mode — replaying recorded turns (no API key).";
+  } else {
+    els.demoDot.hidden = true;
+    els.demoBtn.textContent = "▶ Demo mode";
+    els.sendBtn.disabled = !connected;
+    els.clearBtn.disabled = !connected;
+    if (!connected) {
+      setConn("disconnected");
+      setTurn("idle");
+      els.stageHint.textContent = keyConfigured
+        ? "Connect with your key, or start Demo mode offline."
+        : "No API key detected — start Demo mode, or add XAI_API_KEY.";
+    }
   }
 }
 
@@ -165,7 +316,6 @@ function drawWave() {
   waveCtx.clearRect(0, 0, w, h);
   waveCtx.fillStyle = "#0b0d13";
   waveCtx.fillRect(0, 0, w, h);
-
   const n = waveLevels.length;
   const barW = w / n;
   for (let i = 0; i < n; i += 1) {
@@ -174,8 +324,7 @@ function drawWave() {
     const barH = Math.max(2, v * (h - 8));
     const x = i * barW;
     const y = (h - barH) / 2;
-    const speakingTint = speaking;
-    waveCtx.fillStyle = speakingTint
+    waveCtx.fillStyle = speaking
       ? `rgba(56, 189, 248, ${0.35 + v * 0.65})`
       : micEnabled
         ? `rgba(52, 211, 153, ${0.35 + v * 0.65})`
@@ -185,20 +334,27 @@ function drawWave() {
   requestAnimationFrame(drawWave);
 }
 
+function recordLatency(sec) {
+  if (sec == null || Number.isNaN(sec)) return;
+  latencyHistory.push(sec);
+  if (latencyHistory.length > 24) latencyHistory.shift();
+  const avg = latencyHistory.reduce((a, b) => a + b, 0) / latencyHistory.length;
+  els.mAvg.textContent = fmtSec(avg);
+  drawSpark();
+}
+
 function drawSpark() {
   const w = els.spark.width;
   const h = els.spark.height;
   sparkCtx.clearRect(0, 0, w, h);
   sparkCtx.fillStyle = "#0b0d13";
   sparkCtx.fillRect(0, 0, w, h);
-
   if (latencyHistory.length === 0) {
     sparkCtx.fillStyle = "#9aa3b5";
     sparkCtx.font = "11px sans-serif";
     sparkCtx.fillText("Latency history appears after turns", 10, h / 2 + 4);
     return;
   }
-
   const max = Math.max(1, ...latencyHistory, 1.5);
   const pad = 6;
   sparkCtx.strokeStyle = "rgba(56, 189, 248, 0.9)";
@@ -211,8 +367,6 @@ function drawSpark() {
     else sparkCtx.lineTo(x, y);
   });
   sparkCtx.stroke();
-
-  // 0.70s reference line
   const yRef = h - pad - (0.7 / max) * (h - pad * 2);
   sparkCtx.strokeStyle = "rgba(167, 139, 250, 0.45)";
   sparkCtx.setLineDash([4, 4]);
@@ -235,7 +389,9 @@ function ensureEmptyChatHint() {
     const empty = document.createElement("div");
     empty.className = "empty-chat";
     empty.id = "emptyChat";
-    empty.textContent = "No turns yet. Connect, then send a message or enable the mic.";
+    empty.textContent = keyConfigured
+      ? "No turns yet. Connect, Demo mode, or Compare high vs none."
+      : "No API key — click Demo mode to explore offline, or add XAI_API_KEY.";
     els.chat.appendChild(empty);
   }
 }
@@ -288,8 +444,7 @@ function beginPartial(role) {
 function finalizePartial(el, finalText, meta = "") {
   if (!el) return;
   el.classList.remove("partial");
-  const role = el.classList.contains("user") ? "You" : "Grok Voice";
-  el.querySelector(".role").textContent = role;
+  el.querySelector(".role").textContent = el.classList.contains("user") ? "You" : "Grok Voice";
   el.querySelector(".body").textContent = finalText || "(empty)";
   if (meta) {
     let m = el.querySelector(".meta");
@@ -303,8 +458,17 @@ function finalizePartial(el, finalText, meta = "") {
   els.chat.scrollTop = els.chat.scrollHeight;
 }
 
+function clearChat() {
+  els.chat.innerHTML = "";
+  ensureEmptyChatHint();
+  partialAssistantEl = null;
+  partialUserEl = null;
+  partialAssistantText = "";
+  partialUserText = "";
+}
+
 // ---------------------------------------------------------------------------
-// Audio playback (streaming PCM16)
+// Audio
 // ---------------------------------------------------------------------------
 
 function stopPlayback() {
@@ -312,14 +476,14 @@ function stopPlayback() {
     try {
       s.stop();
     } catch {
-      /* already stopped */
+      /* */
     }
   });
   activeSources.length = 0;
   nextPlayTime = 0;
   speaking = false;
   els.stopAudioBtn.disabled = true;
-  if (connected && !awaitingResponse) setTurn(micEnabled ? "listening" : "idle");
+  if ((connected || demoMode) && !awaitingResponse) setTurn(micEnabled ? "listening" : "idle");
 }
 
 function playPcmChunk(int16) {
@@ -332,26 +496,26 @@ function playPcmChunk(int16) {
     peak = Math.max(peak, Math.abs(v));
   }
   pushWaveLevel(Math.min(1, peak * 3));
-
   const buffer = ctx.createBuffer(1, float32.length, SAMPLE_RATE);
   buffer.copyToChannel(float32, 0);
   const source = ctx.createBufferSource();
   source.buffer = buffer;
   source.connect(ctx.destination);
-
   const now = ctx.currentTime;
   if (nextPlayTime < now + 0.02) nextPlayTime = now + 0.02;
   source.start(nextPlayTime);
   nextPlayTime += buffer.duration;
   activeSources.push(source);
   els.stopAudioBtn.disabled = false;
+  speaking = true;
+  setTurn("speaking");
   source.onended = () => {
     const idx = activeSources.indexOf(source);
     if (idx >= 0) activeSources.splice(idx, 1);
     if (!activeSources.length && !awaitingResponse) {
       speaking = false;
       els.stopAudioBtn.disabled = true;
-      if (connected) setTurn(micEnabled ? "listening" : "idle");
+      if (connected || demoMode) setTurn(micEnabled ? "listening" : "idle");
     }
   };
 }
@@ -363,9 +527,12 @@ function base64ToInt16(b64) {
   return new Int16Array(bytes.buffer);
 }
 
-// ---------------------------------------------------------------------------
-// Mic capture
-// ---------------------------------------------------------------------------
+function playBase64Pcm(b64, sampleRate = SAMPLE_RATE) {
+  // if sample rates mismatch, still play at SAMPLE_RATE for demo tones
+  void sampleRate;
+  stopPlayback();
+  playPcmChunk(base64ToInt16(b64));
+}
 
 function floatTo16BitPCM(float32) {
   const out = new Int16Array(float32.length);
@@ -386,50 +553,53 @@ function int16ToBase64(int16) {
   return btoa(binary);
 }
 
+function downsampleToRate(float32, fromRate, toRate) {
+  if (fromRate === toRate) return floatTo16BitPCM(float32);
+  const ratio = fromRate / toRate;
+  const newLen = Math.round(float32.length / ratio);
+  const result = new Float32Array(newLen);
+  for (let i = 0; i < newLen; i += 1) result[i] = float32[Math.floor(i * ratio)] || 0;
+  return floatTo16BitPCM(result);
+}
+
 async function startMic() {
-  if (micEnabled) return;
+  if (micEnabled || !connected) return;
   const ctx = ensureAudioCtx();
-  micStream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      channelCount: 1,
-      echoCancellation: true,
-      noiseSuppression: true,
-      autoGainControl: true,
-    },
-  });
+  try {
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        channelCount: 1,
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+  } catch (err) {
+    showFriendlyError(err);
+    return;
+  }
   micSource = ctx.createMediaStreamSource(micStream);
-  // ScriptProcessor is deprecated but widely supported for demos; buffer 4096
   micProcessor = ctx.createScriptProcessor(4096, 1, 1);
   micProcessor.onaudioprocess = (e) => {
     if (!micEnabled || !ws || ws.readyState !== WebSocket.OPEN) return;
     const input = e.inputBuffer.getChannelData(0);
-    // Resample-ish: if context rate != 24000, simple decimate/interpolate
-    const pcm = downsampleTo16kOr24k(input, ctx.sampleRate, SAMPLE_RATE);
+    const pcm = downsampleToRate(input, ctx.sampleRate, SAMPLE_RATE);
     let peak = 0;
     for (let i = 0; i < input.length; i += 5) peak = Math.max(peak, Math.abs(input[i]));
     pushWaveLevel(Math.min(1, peak * 2.2));
-
-    const b64 = int16ToBase64(pcm);
-    sendEvent({
-      type: "input_audio_buffer.append",
-      audio: b64,
-    });
+    sendEvent({ type: "input_audio_buffer.append", audio: int16ToBase64(pcm) });
   };
-  micSource.connect(micProcessor);
-  micProcessor.connect(ctx.destination); // keep processor alive; volume is tiny if silent graph
-  // Mute local monitoring: disconnect destination and use a zero-gain trick
-  micProcessor.disconnect();
   const mute = ctx.createGain();
   mute.gain.value = 0;
+  micSource.connect(micProcessor);
   micProcessor.connect(mute);
   mute.connect(ctx.destination);
-
   micEnabled = true;
   els.micBtn.textContent = "🎙 Mic on";
   els.micBtn.classList.add("active-mic");
   setTurn(speaking ? "speaking" : "listening");
   logEvent("mic started");
-  setStatus("Mic live — server VAD will detect turns automatically (if enabled).", "ok");
+  setStatus("Mic live — server VAD detects turns when enabled.", "ok");
 }
 
 function stopMic() {
@@ -461,20 +631,167 @@ function stopMic() {
   if (connected && !speaking && !awaitingResponse) setTurn("idle");
 }
 
-function downsampleTo16kOr24k(float32, fromRate, toRate) {
-  if (fromRate === toRate) return floatTo16BitPCM(float32);
-  const ratio = fromRate / toRate;
-  const newLen = Math.round(float32.length / ratio);
-  const result = new Float32Array(newLen);
-  for (let i = 0; i < newLen; i += 1) {
-    const idx = Math.floor(i * ratio);
-    result[i] = float32[idx] || 0;
+// ---------------------------------------------------------------------------
+// Demo mode
+// ---------------------------------------------------------------------------
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function ensureDemoBundle() {
+  if (demoBundle) return demoBundle;
+  const res = await fetch("/api/demo");
+  if (!res.ok) {
+    showFriendlyError(await readErrorBody(res));
+    throw new Error("demo load failed");
   }
-  return floatTo16BitPCM(result);
+  demoBundle = await res.json();
+  return demoBundle;
+}
+
+async function runDemoMode() {
+  if (demoMode) {
+    setDemoUi(false);
+    stopPlayback();
+    setStatus("Demo stopped.");
+    return;
+  }
+  if (connected) disconnect();
+  hideFriendlyError();
+  try {
+    const data = await ensureDemoBundle();
+    setDemoUi(true);
+    clearChat();
+    setStatus(data.note || "Playing offline demo…", "ok");
+    logEvent("demo mode start");
+
+    for (const turn of data.turns || []) {
+      if (!demoMode) return;
+      addMessage("user", turn.user);
+      setTurn("thinking");
+      await sleep(350);
+      const partial = beginPartial("assistant");
+      const words = (turn.assistant || "").split(/(\s+)/);
+      let acc = "";
+      for (const w of words) {
+        if (!demoMode) return;
+        acc += w;
+        partial.querySelector(".body").textContent = acc;
+        els.chat.scrollTop = els.chat.scrollHeight;
+        await sleep(18);
+      }
+      const first = turn.metrics?.first_audio_s;
+      const done = turn.metrics?.done_s;
+      finalizePartial(partial, turn.assistant, `demo · first audio ${fmtSec(first)}`);
+      els.mFirst.textContent = fmtSec(first);
+      els.mDone.textContent = fmtSec(done);
+      turnCount += 1;
+      els.mTurns.textContent = String(turnCount);
+      recordLatency(first);
+      (turn.events || []).forEach((ev) => logEvent(ev));
+      if (turn.audio_base64) {
+        playBase64Pcm(turn.audio_base64, data.sample_rate || SAMPLE_RATE);
+        await sleep(Math.min(2200, (done || 1.5) * 900));
+      }
+      setTurn("idle");
+      await sleep(400);
+    }
+    setStatus("Demo complete. Connect with a key for live voice, or run Compare.", "ok");
+  } catch (err) {
+    setDemoUi(false);
+    showFriendlyError(err);
+  }
 }
 
 // ---------------------------------------------------------------------------
-// WebSocket session
+// Compare high vs none
+// ---------------------------------------------------------------------------
+
+async function runCompare() {
+  hideFriendlyError();
+  els.compareBtn.disabled = true;
+  setStatus(keyConfigured ? "Comparing reasoning high vs none (live)…" : "Comparing offline demo A/B…");
+  setTurn("thinking");
+  logEvent("compare start");
+  try {
+    const text =
+      els.prompt.value.trim() ||
+      (demoBundle && demoBundle.compare_prompt) ||
+      undefined;
+    const res = await fetch("/api/compare", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text,
+        voice: els.voice.value,
+        instructions: els.instructions.value,
+        force_demo: !keyConfigured,
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      showFriendlyError(data);
+      return;
+    }
+    lastCompare = data;
+    els.comparePanel.hidden = false;
+    els.compareNote.textContent = `${data.source === "demo" ? "Offline demo" : "Live"} · ${data.prompt}`;
+    els.cmpHighFirst.textContent = fmtSec(data.high?.metrics?.first_audio_s);
+    els.cmpNoneFirst.textContent = fmtSec(data.none?.metrics?.first_audio_s);
+    els.cmpHighText.textContent = data.high?.transcript || "";
+    els.cmpNoneText.textContent = data.none?.transcript || "";
+    if (data.delta_first_audio_s != null) {
+      const d = data.delta_first_audio_s;
+      els.compareDelta.textContent =
+        d > 0
+          ? `none was ${fmtSec(d)} faster to first audio than high on this run.`
+          : d < 0
+            ? `high was ${fmtSec(-d)} faster to first audio than none on this run.`
+            : "Same first-audio latency on this run.";
+    } else {
+      els.compareDelta.textContent = data.note || "";
+    }
+
+    addMessage("user", data.prompt, "compare prompt");
+    addMessage(
+      "assistant",
+      data.high?.transcript || "",
+      `reasoning=high · first audio ${fmtSec(data.high?.metrics?.first_audio_s)} · ${data.source}`,
+    );
+    addMessage(
+      "assistant",
+      data.none?.transcript || "",
+      `reasoning=none · first audio ${fmtSec(data.none?.metrics?.first_audio_s)} · ${data.source}`,
+    );
+
+    recordLatency(data.high?.metrics?.first_audio_s);
+    recordLatency(data.none?.metrics?.first_audio_s);
+    els.mFirst.textContent = fmtSec(data.none?.metrics?.first_audio_s);
+    els.mDone.textContent = fmtSec(data.none?.metrics?.done_s);
+    turnCount += 2;
+    els.mTurns.textContent = String(turnCount);
+
+    // Play high then none
+    if (data.high?.audio_base64) {
+      playBase64Pcm(data.high.audio_base64, data.sample_rate || SAMPLE_RATE);
+      await sleep(1600);
+    }
+    if (data.none?.audio_base64) {
+      playBase64Pcm(data.none.audio_base64, data.sample_rate || SAMPLE_RATE);
+    }
+    setStatus(`Compare done (${data.source}).`, "ok");
+    logEvent(`compare done source=${data.source}`);
+  } catch (err) {
+    showFriendlyError(err);
+  } finally {
+    els.compareBtn.disabled = false;
+    setTurn(connected || demoMode ? "idle" : "idle");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Live WebSocket
 // ---------------------------------------------------------------------------
 
 function wsUrl() {
@@ -523,11 +840,7 @@ function markFirstAudio() {
     firstAudioMs = performance.now();
     const sec = (firstAudioMs - turnStartMs) / 1000;
     els.mFirst.textContent = fmtSec(sec);
-    latencyHistory.push(sec);
-    if (latencyHistory.length > 24) latencyHistory.shift();
-    const avg = latencyHistory.reduce((a, b) => a + b, 0) / latencyHistory.length;
-    els.mAvg.textContent = fmtSec(avg);
-    drawSpark();
+    recordLatency(sec);
   }
   speaking = true;
   setTurn("speaking");
@@ -535,8 +848,7 @@ function markFirstAudio() {
 
 function markTurnDone() {
   if (turnStartMs != null) {
-    const done = (performance.now() - turnStartMs) / 1000;
-    els.mDone.textContent = fmtSec(done);
+    els.mDone.textContent = fmtSec((performance.now() - turnStartMs) / 1000);
     turnCount += 1;
     els.mTurns.textContent = String(turnCount);
   }
@@ -559,7 +871,17 @@ async function connect() {
     disconnect();
     return;
   }
-
+  if (!keyConfigured) {
+    showFriendlyError({
+      code: "missing_key",
+      title: "API key not configured",
+      message: "Live Connect needs XAI_API_KEY. Use Demo mode without a key.",
+      fix: "cp .env.example .env  # then set XAI_API_KEY=xai-… from console.x.ai",
+    });
+    return;
+  }
+  if (demoMode) setDemoUi(false);
+  hideFriendlyError();
   setConn("connecting");
   setStatus("Connecting to Realtime proxy…");
   logEvent("connecting…");
@@ -569,7 +891,7 @@ async function connect() {
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
-    setConnectedUi(true);
+    setLiveUi(true);
     sendEvent(sessionUpdatePayload());
     logEvent("connected + session.update sent");
     setStatus("Connected. Send a message or turn the mic on.", "ok");
@@ -577,13 +899,10 @@ async function connect() {
 
   ws.onmessage = (ev) => {
     if (typeof ev.data !== "string") {
-      // binary audio frames (if transport=binary ever used)
-      const int16 = new Int16Array(ev.data);
       markFirstAudio();
-      playPcmChunk(int16);
+      playPcmChunk(new Int16Array(ev.data));
       return;
     }
-
     let event;
     try {
       event = JSON.parse(ev.data);
@@ -591,23 +910,25 @@ async function connect() {
       logEvent(`non-json: ${String(ev.data).slice(0, 80)}`);
       return;
     }
-
     handleServerEvent(event);
   };
 
   ws.onerror = () => {
     setConn("error");
-    setStatus("WebSocket error — is the server running and XAI_API_KEY set?", "error");
-    logEvent("ws error");
+    showFriendlyError({
+      code: "ws_closed",
+      title: "WebSocket error",
+      message: "Could not keep the live session open.",
+      fix: "Confirm the server is running and XAI_API_KEY is valid, then Connect again.",
+    });
   };
 
   ws.onclose = () => {
     stopMic();
     stopPlayback();
-    setConnectedUi(false);
+    setLiveUi(false);
     ws = null;
     logEvent("disconnected");
-    setStatus("Disconnected.");
   };
 }
 
@@ -622,28 +943,15 @@ function disconnect() {
     }
   }
   ws = null;
-  setConnectedUi(false);
+  setLiveUi(false);
 }
 
 function handleServerEvent(event) {
   const t = event.type || "unknown";
-  if (
-    t.includes("delta") ||
-    t === "response.output_audio.delta" ||
-    t === "response.audio.delta"
-  ) {
-    // don't flood log with every audio delta
-    if (!t.includes("audio")) logEvent(t);
-  } else {
-    logEvent(t);
-  }
+  if (!(t.includes("audio") && t.includes("delta"))) logEvent(t);
 
   if (t === "error" || event.error) {
-    const msg =
-      event.error?.message ||
-      event.message ||
-      (typeof event.error === "string" ? event.error : JSON.stringify(event.error || event));
-    setStatus(msg, "error");
+    showFriendlyError(event.error || event);
     awaitingResponse = false;
     setTurn(micEnabled ? "listening" : "idle");
     return;
@@ -654,7 +962,6 @@ function handleServerEvent(event) {
     return;
   }
 
-  // User speech transcription (server VAD path)
   if (
     t === "conversation.item.input_audio_transcription.delta" ||
     t === "conversation.item.input_audio_transcription.completed"
@@ -675,9 +982,7 @@ function handleServerEvent(event) {
         finalizePartial(partialUserEl, text);
         partialUserEl = null;
         partialUserText = "";
-      } else if (text) {
-        addMessage("user", text);
-      }
+      } else if (text) addMessage("user", text);
       markTurnStart();
     }
     return;
@@ -685,7 +990,7 @@ function handleServerEvent(event) {
 
   if (t === "input_audio_buffer.speech_started") {
     setTurn("listening");
-    stopPlayback(); // barge-in
+    stopPlayback();
     if (!partialUserEl) {
       partialUserEl = beginPartial("user");
       partialUserText = "";
@@ -735,21 +1040,39 @@ function handleServerEvent(event) {
     return;
   }
 
-  if (t === "response.done") {
-    markTurnDone();
-    return;
-  }
+  if (t === "response.done") markTurnDone();
 }
 
 function sendText() {
   const text = els.prompt.value.trim();
-  if (!text || !connected) return;
+  if (!text) return;
+
+  if (demoMode) {
+    // In demo mode, free-form text maps to a synthetic local reply using last demo style
+    addMessage("user", text);
+    els.prompt.value = "";
+    const reply =
+      "Demo mode is offline — recorded audio only. Connect with XAI_API_KEY for live answers, or run Compare.";
+    addMessage("assistant", reply, "demo · local");
+    setStatus("Demo mode cannot call the model for free-form chat.", "ok");
+    return;
+  }
+
+  if (!connected) {
+    showFriendlyError({
+      code: "ws_closed",
+      title: "Not connected",
+      message: "Connect for live chat, or use Demo mode / Compare offline.",
+      fix: "Click Connect (needs key) or ▶ Demo mode.",
+    });
+    return;
+  }
+
   addMessage("user", text);
   els.prompt.value = "";
   markTurnStart();
   partialAssistantEl = beginPartial("assistant");
   partialAssistantText = "";
-
   sendEvent({
     type: "conversation.item.create",
     item: {
@@ -765,7 +1088,6 @@ function sendText() {
 function interrupt() {
   stopPlayback();
   sendEvent({ type: "response.cancel" });
-  // clear pending input audio if any
   sendEvent({ type: "input_audio_buffer.clear" });
   awaitingResponse = false;
   if (partialAssistantEl) {
@@ -778,15 +1100,6 @@ function interrupt() {
   logEvent("interrupt");
 }
 
-function clearChat() {
-  els.chat.innerHTML = "";
-  ensureEmptyChatHint();
-  partialAssistantEl = null;
-  partialUserEl = null;
-  partialAssistantText = "";
-  partialUserText = "";
-}
-
 // ---------------------------------------------------------------------------
 // Bootstrap
 // ---------------------------------------------------------------------------
@@ -796,17 +1109,28 @@ async function loadHealth() {
     const res = await fetch("/api/health");
     const data = await res.json();
     els.modelName.textContent = data.model || "unknown";
-    if (data.key_configured) {
+    keyConfigured = !!data.key_configured;
+    demoAvailable = !!data.demo_available;
+    if (keyConfigured) {
       els.keyStatus.textContent = "API key configured";
       els.keyStatus.classList.add("ok");
+      els.keyStatus.classList.remove("bad");
     } else {
-      els.keyStatus.textContent = "XAI_API_KEY missing";
-      els.keyStatus.classList.add("bad");
+      els.keyStatus.textContent = "no key · demo ok";
+      els.keyStatus.classList.add("warn");
+      els.keyStatus.classList.remove("ok", "bad");
     }
-  } catch {
+    els.stageHint.textContent = keyConfigured
+      ? "Connect with your key, or start Demo mode offline."
+      : "No API key — click Demo mode to explore the UI offline.";
+    if (!keyConfigured && demoAvailable) {
+      setStatus("Tip: no API key detected. Click ▶ Demo mode to try the lab offline.", "ok");
+    }
+  } catch (err) {
     els.modelName.textContent = "offline";
     els.keyStatus.textContent = "health check failed";
     els.keyStatus.classList.add("bad");
+    showFriendlyError(err);
   }
 }
 
@@ -821,7 +1145,7 @@ async function loadExamples() {
       btn.textContent = ex.label;
       btn.addEventListener("click", () => {
         els.prompt.value = ex.text;
-        if (connected) els.prompt.focus();
+        els.prompt.focus();
       });
       els.examples.appendChild(btn);
     });
@@ -838,7 +1162,7 @@ async function loadExamples() {
           setStatus(`Scenario applied: ${sc.label}`, "ok");
           logEvent(`scenario ${sc.label}`);
         } else {
-          setStatus("Scenario loaded — hit Connect, then Send.", "ok");
+          setStatus("Scenario loaded — Connect or Demo, then Send.", "ok");
         }
       });
       els.scenarios.appendChild(btn);
@@ -852,49 +1176,66 @@ els.connectBtn.addEventListener("click", () => {
   if (connected) disconnect();
   else connect();
 });
-
+els.demoBtn.addEventListener("click", () => runDemoMode());
+els.compareBtn.addEventListener("click", () => runCompare());
 els.sendBtn.addEventListener("click", sendText);
-
 els.prompt.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
     sendText();
   }
 });
-
 els.micBtn.addEventListener("click", async () => {
-  try {
-    if (micEnabled) stopMic();
-    else await startMic();
-  } catch (err) {
-    setStatus(`Mic error: ${err.message || err}`, "error");
-    logEvent(`mic error ${err}`);
-  }
+  if (micEnabled) stopMic();
+  else await startMic();
 });
-
 els.interruptBtn.addEventListener("click", interrupt);
 els.stopAudioBtn.addEventListener("click", stopPlayback);
 els.clearBtn.addEventListener("click", clearChat);
-
 els.applySessionBtn.addEventListener("click", () => {
   sendEvent(sessionUpdatePayload());
-  setStatus("session.update sent (voice / reasoning / VAD / instructions).", "ok");
+  setStatus("session.update sent.", "ok");
   logEvent("session.update applied");
 });
-
 els.toggleLogBtn.addEventListener("click", () => {
   const hidden = els.eventLog.classList.toggle("hidden");
   els.toggleLogBtn.textContent = hidden ? "Show" : "Hide";
 });
+els.errorDismissBtn.addEventListener("click", hideFriendlyError);
+els.errorDemoBtn.addEventListener("click", () => {
+  hideFriendlyError();
+  runDemoMode();
+});
+els.cmpPlayHigh.addEventListener("click", () => {
+  if (lastCompare?.high?.audio_base64) {
+    playBase64Pcm(lastCompare.high.audio_base64, lastCompare.sample_rate || SAMPLE_RATE);
+  }
+});
+els.cmpPlayNone.addEventListener("click", () => {
+  if (lastCompare?.none?.audio_base64) {
+    playBase64Pcm(lastCompare.none.audio_base64, lastCompare.sample_rate || SAMPLE_RATE);
+  }
+});
 
-// One-shot latency path kept available via keyboard shortcut for power users
-// (Ctrl/Cmd+Shift+S) — still hits /api/speak without needing a live session.
+// Enable send when not live if demo; keep enabled for compare prompt prep
+els.sendBtn.disabled = true;
+els.clearBtn.disabled = false;
+
 document.addEventListener("keydown", async (e) => {
   if (!(e.metaKey || e.ctrlKey) || !e.shiftKey || e.key.toLowerCase() !== "s") return;
   e.preventDefault();
   const text = els.prompt.value.trim();
   if (!text) {
     setStatus("Type a prompt first for one-shot speak.", "error");
+    return;
+  }
+  if (!keyConfigured) {
+    showFriendlyError({
+      code: "missing_key",
+      title: "API key not configured",
+      message: "One-shot speak needs XAI_API_KEY. Use Demo or Compare offline.",
+      fix: "cp .env.example .env  # set XAI_API_KEY=xai-…",
+    });
     return;
   }
   setStatus("One-shot /api/speak…");
@@ -910,7 +1251,10 @@ document.addEventListener("keydown", async (e) => {
       }),
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail));
+    if (!res.ok) {
+      showFriendlyError(data);
+      return;
+    }
     addMessage("user", text);
     addMessage(
       "assistant",
@@ -919,15 +1263,11 @@ document.addEventListener("keydown", async (e) => {
     );
     els.mFirst.textContent = fmtSec(data.metrics?.connect_to_first_audio_s);
     els.mDone.textContent = fmtSec(data.metrics?.connect_to_done_s);
-    if (data.metrics?.connect_to_first_audio_s != null) {
-      latencyHistory.push(data.metrics.connect_to_first_audio_s);
-      drawSpark();
-    }
-    ensureAudioCtx();
-    playPcmChunk(base64ToInt16(data.audio_base64));
+    recordLatency(data.metrics?.connect_to_first_audio_s);
+    playBase64Pcm(data.audio_base64, data.sample_rate || SAMPLE_RATE);
     setStatus("One-shot complete.", "ok");
   } catch (err) {
-    setStatus(err.message || String(err), "error");
+    showFriendlyError(err);
   }
 });
 
@@ -936,3 +1276,5 @@ drawWave();
 drawSpark();
 loadHealth();
 loadExamples();
+// Preload demo fixture for faster offline paths
+ensureDemoBundle().catch(() => {});

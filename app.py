@@ -31,6 +31,7 @@ STATIC_DIR = ROOT / "static"
 HEADER_SRC = ROOT / "assets" / "header.jpg"
 HEADER_DST = STATIC_DIR / "header.jpg"
 PROMPTS_PATH = ROOT / "data" / "prompts.json"
+DEMO_PATH = ROOT / "data" / "demo-session.json"
 REALTIME_URL = f"wss://api.x.ai/v1/realtime?model={MODEL}"
 
 app = FastAPI(title="Grok Voice Think Fast 2.0 Live Lab")
@@ -55,12 +56,106 @@ class SpeakRequest(BaseModel):
     instructions: str | None = Field(default=None)
 
 
+class CompareRequest(BaseModel):
+    text: str | None = Field(default=None, max_length=4000)
+    voice: str | None = Field(default=None)
+    instructions: str | None = Field(default=None)
+    force_demo: bool = False
+
+
+def _load_demo() -> dict[str, Any]:
+    if not DEMO_PATH.exists():
+        raise HTTPException(status_code=404, detail=_friendly_error("demo_missing"))
+    return json.loads(DEMO_PATH.read_text(encoding="utf-8"))
+
+
+def _friendly_error(
+    code: str,
+    raw: str | None = None,
+    *,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Map internal failures to plain-English UI guidance."""
+    catalog: dict[str, dict[str, str]] = {
+        "missing_key": {
+            "title": "API key not configured",
+            "message": "The server has no XAI_API_KEY. Use Demo mode without a key, or add one.",
+            "fix": "cp .env.example .env  # then set XAI_API_KEY=xai-… from console.x.ai",
+        },
+        "invalid_key": {
+            "title": "API key rejected",
+            "message": "xAI rejected the key (unauthorized). Check the value and that Voice is enabled.",
+            "fix": "Rotate/create a key at https://console.x.ai/ and update .env",
+        },
+        "model_access": {
+            "title": "Model not available",
+            "message": "This key cannot use the voice model. Confirm Realtime / Voice access on the team.",
+            "fix": f"Try model pin {MODEL} or switch to Demo mode.",
+        },
+        "network": {
+            "title": "Could not reach xAI Realtime",
+            "message": "Network or TLS failed while connecting to api.x.ai.",
+            "fix": "Check internet, proxy, VPN, then retry Connect.",
+        },
+        "timeout": {
+            "title": "Timed out waiting for audio",
+            "message": "The Realtime session opened but no complete response arrived in time.",
+            "fix": "Retry with a shorter prompt, or use Demo mode to verify the UI.",
+        },
+        "no_audio": {
+            "title": "No audio returned",
+            "message": "The model responded without playable audio bytes.",
+            "fix": "Check model access and try again. Demo mode still works offline.",
+        },
+        "demo_missing": {
+            "title": "Demo fixture missing",
+            "message": "data/demo-session.json was not found in the repo checkout.",
+            "fix": "Pull latest main or restore data/demo-session.json",
+        },
+        "mic_denied": {
+            "title": "Microphone blocked",
+            "message": "The browser denied mic access.",
+            "fix": "Allow microphone for this site, or use text chat / Demo mode.",
+        },
+        "ws_closed": {
+            "title": "Session disconnected",
+            "message": "The live WebSocket closed unexpectedly.",
+            "fix": "Click Connect again. If it repeats, check XAI_API_KEY and server logs.",
+        },
+        "generic": {
+            "title": "Something went wrong",
+            "message": raw or "Unexpected error.",
+            "fix": "Try Demo mode to confirm the UI, then retry with a key.",
+        },
+    }
+    item = catalog.get(code, catalog["generic"]).copy()
+    if raw and code == "generic":
+        item["message"] = raw
+    payload: dict[str, Any] = {"code": code, **item}
+    if raw and code != "generic":
+        payload["raw"] = raw[:500]
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _classify_exception(exc: Exception) -> dict[str, Any]:
+    text = str(exc)
+    low = text.lower()
+    if "401" in text or "unauthorized" in low or "invalid api" in low:
+        return _friendly_error("invalid_key", text)
+    if "403" in text or "permission" in low or "not available" in low or "model" in low and "access" in low:
+        return _friendly_error("model_access", text)
+    if "timed out" in low or "timeout" in low:
+        return _friendly_error("timeout", text)
+    if "name or service not known" in low or "connection refused" in low or "network" in low:
+        return _friendly_error("network", text)
+    return _friendly_error("generic", text)
+
+
 def _require_key() -> str:
     if not XAI_API_KEY:
-        raise HTTPException(
-            status_code=503,
-            detail="XAI_API_KEY is not set. Copy .env.example → .env and add your key.",
-        )
+        raise HTTPException(status_code=503, detail=_friendly_error("missing_key"))
     return XAI_API_KEY
 
 
@@ -72,11 +167,14 @@ def index() -> FileResponse:
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     key_set = bool(XAI_API_KEY)
+    demo_ok = DEMO_PATH.exists()
     return {
-        "ok": key_set,
+        "ok": key_set or demo_ok,
         "model": MODEL,
         "voice_default": VOICE,
         "key_configured": key_set,
+        "demo_available": demo_ok,
+        "mode_recommended": "live" if key_set else "demo",
         "realtime_url": REALTIME_URL if key_set else None,
         "features": [
             "live-session",
@@ -85,6 +183,9 @@ def health() -> dict[str, Any]:
             "multi-turn",
             "scenarios",
             "one-shot-speak",
+            "offline-demo",
+            "reasoning-compare",
+            "friendly-errors",
         ],
     }
 
@@ -96,17 +197,20 @@ def examples() -> dict[str, Any]:
     return json.loads(PROMPTS_PATH.read_text(encoding="utf-8"))
 
 
-@app.post("/api/speak")
-async def speak(req: SpeakRequest) -> dict[str, Any]:
-    """One-shot text → speech turn (also used by Ctrl/Cmd+Shift+S)."""
-    api_key = _require_key()
-    voice = (req.voice or VOICE).strip() or VOICE
-    instructions = (
-        req.instructions
-        or "You are a sharp, concise voice assistant demoing Grok Voice Think Fast 2.0. "
-        "Prefer short sentences. No fluff. Answer clearly."
-    )
+@app.get("/api/demo")
+def demo_bundle() -> dict[str, Any]:
+    """Full offline session fixture (turns + compare + PCM)."""
+    return _load_demo()
 
+
+async def _speak_once(
+    *,
+    text: str,
+    voice: str,
+    reasoning_effort: str,
+    instructions: str,
+) -> dict[str, Any]:
+    api_key = _require_key()
     headers = {"Authorization": f"Bearer {api_key}"}
     audio_chunks: list[bytes] = []
     transcript_parts: list[str] = []
@@ -130,7 +234,7 @@ async def speak(req: SpeakRequest) -> dict[str, Any]:
                         "session": {
                             "voice": voice,
                             "instructions": instructions,
-                            "reasoning": {"effort": req.reasoning_effort},
+                            "reasoning": {"effort": reasoning_effort},
                             "turn_detection": None,
                             "audio": {
                                 "input": {"format": {"type": "audio/pcm", "rate": sample_rate}},
@@ -147,7 +251,7 @@ async def speak(req: SpeakRequest) -> dict[str, Any]:
                         "item": {
                             "type": "message",
                             "role": "user",
-                            "content": [{"type": "input_text", "text": req.text}],
+                            "content": [{"type": "input_text", "text": text}],
                         },
                     }
                 )
@@ -186,22 +290,17 @@ async def speak(req: SpeakRequest) -> dict[str, Any]:
                     t_done = time.perf_counter()
                     break
                 elif et == "error":
-                    raise HTTPException(
-                        status_code=502,
-                        detail=event.get("error") or event,
-                    )
+                    err = event.get("error") or event
+                    raise RuntimeError(json.dumps(err) if not isinstance(err, str) else err)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=502, detail=f"Realtime session failed: {exc}") from exc
+        raise HTTPException(status_code=502, detail=_classify_exception(exc)) from exc
 
     if not audio_chunks:
         raise HTTPException(
             status_code=502,
-            detail={
-                "message": "No audio returned. Check model access and key permissions.",
-                "events_seen": events_seen[-20:],
-            },
+            detail=_friendly_error("no_audio", extra={"events_seen": events_seen[-20:]}),
         )
 
     pcm = b"".join(audio_chunks)
@@ -209,7 +308,7 @@ async def speak(req: SpeakRequest) -> dict[str, Any]:
     return {
         "model": MODEL,
         "voice": voice,
-        "reasoning_effort": req.reasoning_effort,
+        "reasoning_effort": reasoning_effort,
         "transcript": "".join(transcript_parts).strip(),
         "sample_rate": sample_rate,
         "format": "audio/pcm; encoding=pcm_s16le; channels=1",
@@ -222,8 +321,127 @@ async def speak(req: SpeakRequest) -> dict[str, Any]:
             else None,
             "connect_to_done_s": round(t_end - t_connect, 3),
             "first_audio_to_done_s": round(t_end - t_first_audio, 3) if t_first_audio else None,
+            "first_audio_s": round((t_first_audio - t_connect), 3) if t_first_audio else None,
+            "done_s": round(t_end - t_connect, 3),
         },
         "events_tail": events_seen[-12:],
+        "source": "live",
+    }
+
+
+@app.post("/api/speak")
+async def speak(req: SpeakRequest) -> dict[str, Any]:
+    """One-shot text → speech turn (also used by Ctrl/Cmd+Shift+S)."""
+    voice = (req.voice or VOICE).strip() or VOICE
+    instructions = (
+        req.instructions
+        or "You are a sharp, concise voice assistant demoing Grok Voice Think Fast 2.0. "
+        "Prefer short sentences. No fluff. Answer clearly."
+    )
+    return await _speak_once(
+        text=req.text,
+        voice=voice,
+        reasoning_effort=req.reasoning_effort,
+        instructions=instructions,
+    )
+
+
+@app.post("/api/compare")
+async def compare(req: CompareRequest) -> dict[str, Any]:
+    """Run the same prompt with reasoning high vs none (live or offline demo)."""
+    demo = _load_demo()
+    prompt = (req.text or demo.get("compare_prompt") or "").strip()
+    if not prompt:
+        raise HTTPException(
+            status_code=400,
+            detail=_friendly_error("generic", "Compare needs a prompt."),
+        )
+
+    use_demo = req.force_demo or not XAI_API_KEY
+    if use_demo:
+        high = demo["compare"]["high"]
+        none = demo["compare"]["none"]
+        return {
+            "source": "demo",
+            "prompt": demo.get("compare_prompt") or prompt,
+            "model": demo.get("model"),
+            "sample_rate": demo.get("sample_rate", 24000),
+            "high": {
+                "reasoning_effort": "high",
+                "transcript": high["transcript"],
+                "metrics": high["metrics"],
+                "audio_base64": high["audio_base64"],
+            },
+            "none": {
+                "reasoning_effort": "none",
+                "transcript": none["transcript"],
+                "metrics": none["metrics"],
+                "audio_base64": none["audio_base64"],
+            },
+            "delta_first_audio_s": round(
+                high["metrics"]["first_audio_s"] - none["metrics"]["first_audio_s"], 3
+            ),
+            "note": demo.get("note"),
+        }
+
+    voice = (req.voice or VOICE).strip() or VOICE
+    instructions = (
+        req.instructions
+        or "You are a sharp, concise voice assistant. Prefer short sentences. Answer clearly."
+    )
+
+    high_res, none_res = await asyncio.gather(
+        _speak_once(
+            text=prompt,
+            voice=voice,
+            reasoning_effort="high",
+            instructions=instructions,
+        ),
+        _speak_once(
+            text=prompt,
+            voice=voice,
+            reasoning_effort="none",
+            instructions=instructions,
+        ),
+    )
+
+    h = high_res["metrics"].get("first_audio_s") or high_res["metrics"].get(
+        "connect_to_first_audio_s"
+    )
+    n = none_res["metrics"].get("first_audio_s") or none_res["metrics"].get(
+        "connect_to_first_audio_s"
+    )
+    delta = None
+    if h is not None and n is not None:
+        delta = round(float(h) - float(n), 3)
+
+    return {
+        "source": "live",
+        "prompt": prompt,
+        "model": MODEL,
+        "sample_rate": high_res.get("sample_rate", 24000),
+        "high": {
+            "reasoning_effort": "high",
+            "transcript": high_res["transcript"],
+            "metrics": {
+                "first_audio_s": h,
+                "done_s": high_res["metrics"].get("done_s")
+                or high_res["metrics"].get("connect_to_done_s"),
+            },
+            "audio_base64": high_res["audio_base64"],
+        },
+        "none": {
+            "reasoning_effort": "none",
+            "transcript": none_res["transcript"],
+            "metrics": {
+                "first_audio_s": n,
+                "done_s": none_res["metrics"].get("done_s")
+                or none_res["metrics"].get("connect_to_done_s"),
+            },
+            "audio_base64": none_res["audio_base64"],
+        },
+        "delta_first_audio_s": delta,
+        "note": "Live A/B on the same prompt with reasoning.effort high vs none.",
     }
 
 
@@ -232,7 +450,7 @@ async def _proxy_realtime(client_ws: WebSocket) -> None:
     api_key = XAI_API_KEY
     if not api_key:
         await client_ws.send_json(
-            {"type": "error", "error": {"message": "XAI_API_KEY not configured on server"}}
+            {"type": "error", "error": _friendly_error("missing_key")}
         )
         await client_ws.close()
         return
@@ -277,7 +495,6 @@ async def _proxy_realtime(client_ws: WebSocket) -> None:
                     continue
                 if isinstance(exc, (WebSocketDisconnect, asyncio.CancelledError)):
                     continue
-                # websockets ConnectionClosed* on hangup is expected
                 if type(exc).__name__.startswith("ConnectionClosed"):
                     continue
                 raise exc
@@ -285,7 +502,9 @@ async def _proxy_realtime(client_ws: WebSocket) -> None:
         return
     except Exception as exc:  # noqa: BLE001
         try:
-            await client_ws.send_json({"type": "error", "error": {"message": str(exc)}})
+            await client_ws.send_json(
+                {"type": "error", "error": _classify_exception(exc)}
+            )
         except Exception:  # noqa: BLE001
             pass
     finally:

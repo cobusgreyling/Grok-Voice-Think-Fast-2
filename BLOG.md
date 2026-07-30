@@ -181,12 +181,13 @@ This repository ships an **interactive live lab** (not just a one-shot button):
 5. **Per-turn latency** (send → first audio) with a sparkline vs the **0.70s** lab reference
 
 ```bash
-cp .env.example .env   # set XAI_API_KEY
-./run.sh
-# open http://127.0.0.1:7861 → Connect
+python app.py
+# open http://127.0.0.1:7861 → Demo mode (no key)
+# optional: set XAI_API_KEY → Connect for live voice
+# try: Compare high vs none
 ```
 
-The goal is the same as the Nemotron embed “wow” demos: prove the claim in a browser in under a minute — but this time as a **conversation**, not a single shot.
+The goal is the same as the Nemotron embed “wow” demos: prove the claim in a browser in under a minute — offline first, live when you have a key.
 
 For production WebRTC / telephony samples, also see the official xAI cookbook agents.
 

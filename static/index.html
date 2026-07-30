@@ -14,7 +14,8 @@
       <h1>Grok Voice Think Fast 2.0</h1>
       <p class="sub">
         Live multi-turn session. Stream audio as it thinks.
-        Toggle mic, change voice mid-session, and watch first-audio latency per turn.
+        No API key? Use <strong>Demo mode</strong>. Want the product claim?
+        Run <strong>Compare high vs none</strong>.
       </p>
       <div class="badges">
         <span class="badge">model: <code id="modelName">…</code></span>
@@ -25,8 +26,19 @@
     </div>
   </header>
 
+  <div id="errorBanner" class="error-banner" hidden>
+    <div class="error-banner-inner">
+      <strong id="errorTitle">Error</strong>
+      <p id="errorMessage"></p>
+      <pre id="errorFix" class="error-fix"></pre>
+      <div class="error-actions">
+        <button type="button" id="errorDemoBtn" class="ghost">Start Demo mode</button>
+        <button type="button" id="errorDismissBtn" class="ghost">Dismiss</button>
+      </div>
+    </div>
+  </div>
+
   <main class="layout">
-    <!-- LEFT: live stage -->
     <section class="panel stage">
       <div class="stage-top">
         <div class="orb" id="orb" aria-hidden="true">
@@ -35,14 +47,16 @@
         </div>
         <div class="stage-meta">
           <h2>Live session</h2>
-          <p id="stageHint">Connect to start a persistent Realtime conversation.</p>
+          <p id="stageHint">Connect with a key, or start Demo mode offline.</p>
           <canvas id="wave" width="640" height="72" aria-label="Audio waveform"></canvas>
         </div>
       </div>
 
       <div class="controls-row">
         <button id="connectBtn" type="button">Connect</button>
-        <button id="micBtn" type="button" class="ghost" disabled title="Requires connected session">
+        <button id="demoBtn" type="button" class="ghost">▶ Demo mode</button>
+        <button id="compareBtn" type="button" class="ghost">⚖ Compare high vs none</button>
+        <button id="micBtn" type="button" class="ghost" disabled title="Requires live session">
           🎙 Mic off
         </button>
         <button id="interruptBtn" type="button" class="ghost" disabled>Interrupt</button>
@@ -54,7 +68,6 @@
           id="prompt"
           rows="3"
           placeholder="Type a message… Enter to send · Shift+Enter for newline"
-          disabled
         ></textarea>
         <div class="composer-actions">
           <button id="sendBtn" type="button" disabled>Send</button>
@@ -66,7 +79,6 @@
       <div class="scenarios" id="scenarios"></div>
     </section>
 
-    <!-- RIGHT: settings + metrics -->
     <aside class="side">
       <section class="panel">
         <h2>Session</h2>
@@ -104,8 +116,7 @@ When the user role-plays a customer, stay in character as a helpful agent.</text
           Apply settings to live session
         </button>
         <p class="hint tight">
-          Voice / reasoning / instructions can be updated while connected via
-          <code>session.update</code>.
+          Demo mode needs no key. Live Connect needs <code>XAI_API_KEY</code> in <code>.env</code>.
         </p>
       </section>
 
@@ -136,13 +147,33 @@ When the user role-plays a customer, stay in character as a helpful agent.</text
           Lab TTFA for 2.0 is <strong>0.70s</strong>. Your numbers include network + session.
         </p>
       </section>
+
+      <section class="panel compare-panel" id="comparePanel" hidden>
+        <h2>Reasoning A/B</h2>
+        <p class="hint tight" id="compareNote"></p>
+        <div class="compare-grid">
+          <div class="compare-card">
+            <div class="compare-label">high</div>
+            <div class="metric-value" id="cmpHighFirst">—</div>
+            <p class="compare-transcript" id="cmpHighText"></p>
+            <button type="button" class="ghost tiny" id="cmpPlayHigh">Play</button>
+          </div>
+          <div class="compare-card">
+            <div class="compare-label">none</div>
+            <div class="metric-value" id="cmpNoneFirst">—</div>
+            <p class="compare-transcript" id="cmpNoneText"></p>
+            <button type="button" class="ghost tiny" id="cmpPlayNone">Play</button>
+          </div>
+        </div>
+        <p class="hint tight" id="compareDelta"></p>
+      </section>
     </aside>
 
-    <!-- FULL WIDTH: conversation -->
     <section class="panel chat-panel">
       <div class="chat-head">
         <h2>Conversation</h2>
         <span class="live-dot" id="liveDot" hidden>LIVE</span>
+        <span class="live-dot demo-dot" id="demoDot" hidden>DEMO</span>
       </div>
       <div id="chat" class="chat" aria-live="polite"></div>
       <div id="status" class="status"></div>
@@ -162,7 +193,7 @@ When the user role-plays a customer, stay in character as a helpful agent.</text
     ·
     <a href="https://docs.x.ai/developers/model-capabilities/audio/voice-agent" target="_blank" rel="noopener">Docs</a>
     ·
-    <span>Companion lab for <code>BLOG.md</code></span>
+    <a href="https://github.com/cobusgreyling/Grok-Voice-Think-Fast-2/blob/main/BLOG.md" target="_blank" rel="noopener">Read the article</a>
   </footer>
 
   <script src="/static/app.js"></script>
