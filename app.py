@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Grok Voice Think Fast 2.0 — latency + reasoning showcase (FastAPI)."""
+"""Grok Voice Think Fast 2.0 — interactive Realtime lab (FastAPI)."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ HEADER_DST = STATIC_DIR / "header.jpg"
 PROMPTS_PATH = ROOT / "data" / "prompts.json"
 REALTIME_URL = f"wss://api.x.ai/v1/realtime?model={MODEL}"
 
-app = FastAPI(title="Grok Voice Think Fast 2.0 Demo")
+app = FastAPI(title="Grok Voice Think Fast 2.0 Live Lab")
 
 
 def _ensure_header() -> None:
@@ -78,19 +78,27 @@ def health() -> dict[str, Any]:
         "voice_default": VOICE,
         "key_configured": key_set,
         "realtime_url": REALTIME_URL if key_set else None,
+        "features": [
+            "live-session",
+            "streaming-audio",
+            "mic-vad",
+            "multi-turn",
+            "scenarios",
+            "one-shot-speak",
+        ],
     }
 
 
 @app.get("/api/examples")
 def examples() -> dict[str, Any]:
     if not PROMPTS_PATH.exists():
-        return {"examples": []}
+        return {"examples": [], "scenarios": []}
     return json.loads(PROMPTS_PATH.read_text(encoding="utf-8"))
 
 
 @app.post("/api/speak")
 async def speak(req: SpeakRequest) -> dict[str, Any]:
-    """One-shot text → speech turn. Returns PCM16 base64 + first-audio latency."""
+    """One-shot text → speech turn (also used by Ctrl/Cmd+Shift+S)."""
     api_key = _require_key()
     voice = (req.voice or VOICE).strip() or VOICE
     instructions = (
@@ -114,8 +122,8 @@ async def speak(req: SpeakRequest) -> dict[str, Any]:
             additional_headers=headers,
             open_timeout=20,
             max_size=16 * 1024 * 1024,
-        ) as ws:
-            await ws.send(
+        ) as xai_ws:
+            await xai_ws.send(
                 json.dumps(
                     {
                         "type": "session.update",
@@ -132,7 +140,7 @@ async def speak(req: SpeakRequest) -> dict[str, Any]:
                     }
                 )
             )
-            await ws.send(
+            await xai_ws.send(
                 json.dumps(
                     {
                         "type": "conversation.item.create",
@@ -144,11 +152,11 @@ async def speak(req: SpeakRequest) -> dict[str, Any]:
                     }
                 )
             )
-            await ws.send(json.dumps({"type": "response.create"}))
+            await xai_ws.send(json.dumps({"type": "response.create"}))
 
             deadline = time.perf_counter() + 90.0
             while time.perf_counter() < deadline:
-                raw = await asyncio.wait_for(ws.recv(), timeout=30.0)
+                raw = await asyncio.wait_for(xai_ws.recv(), timeout=30.0)
                 if isinstance(raw, bytes):
                     if t_first_audio is None:
                         t_first_audio = time.perf_counter()
@@ -168,11 +176,6 @@ async def speak(req: SpeakRequest) -> dict[str, Any]:
                 elif et in (
                     "response.output_audio_transcript.delta",
                     "response.audio_transcript.delta",
-                ):
-                    part = event.get("delta") or ""
-                    if part:
-                        transcript_parts.append(part)
-                elif et in (
                     "response.output_text.delta",
                     "response.text.delta",
                 ):
@@ -224,13 +227,13 @@ async def speak(req: SpeakRequest) -> dict[str, Any]:
     }
 
 
-@app.websocket("/ws/proxy")
-async def voice_proxy(client_ws: WebSocket) -> None:
-    """Optional bidirectional proxy for live experiments (browser ↔ xAI)."""
-    await client_ws.accept()
+async def _proxy_realtime(client_ws: WebSocket) -> None:
+    """Browser ↔ xAI Realtime bidirectional proxy."""
     api_key = XAI_API_KEY
     if not api_key:
-        await client_ws.send_json({"type": "error", "message": "XAI_API_KEY not configured"})
+        await client_ws.send_json(
+            {"type": "error", "error": {"message": "XAI_API_KEY not configured on server"}}
+        )
         await client_ws.close()
         return
 
@@ -240,6 +243,8 @@ async def voice_proxy(client_ws: WebSocket) -> None:
             additional_headers={"Authorization": f"Bearer {api_key}"},
             open_timeout=20,
             max_size=16 * 1024 * 1024,
+            ping_interval=20,
+            ping_timeout=20,
         ) as upstream:
 
             async def client_to_upstream() -> None:
@@ -247,9 +252,9 @@ async def voice_proxy(client_ws: WebSocket) -> None:
                     msg = await client_ws.receive()
                     if msg["type"] == "websocket.disconnect":
                         break
-                    if "text" in msg and msg["text"] is not None:
+                    if msg.get("text") is not None:
                         await upstream.send(msg["text"])
-                    elif "bytes" in msg and msg["bytes"] is not None:
+                    elif msg.get("bytes") is not None:
                         await upstream.send(msg["bytes"])
 
             async def upstream_to_client() -> None:
@@ -259,24 +264,28 @@ async def voice_proxy(client_ws: WebSocket) -> None:
                     else:
                         await client_ws.send_text(raw)
 
-            done, pending = await asyncio.wait(
-                [
-                    asyncio.create_task(client_to_upstream()),
-                    asyncio.create_task(upstream_to_client()),
-                ],
-                return_when=asyncio.FIRST_EXCEPTION,
-            )
+            tasks = [
+                asyncio.create_task(client_to_upstream(), name="client→xai"),
+                asyncio.create_task(upstream_to_client(), name="xai→client"),
+            ]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
             for task in pending:
                 task.cancel()
             for task in done:
                 exc = task.exception()
-                if exc and not isinstance(exc, (WebSocketDisconnect, asyncio.CancelledError)):
-                    raise exc
+                if not exc:
+                    continue
+                if isinstance(exc, (WebSocketDisconnect, asyncio.CancelledError)):
+                    continue
+                # websockets ConnectionClosed* on hangup is expected
+                if type(exc).__name__.startswith("ConnectionClosed"):
+                    continue
+                raise exc
     except WebSocketDisconnect:
         return
     except Exception as exc:  # noqa: BLE001
         try:
-            await client_ws.send_json({"type": "error", "message": str(exc)})
+            await client_ws.send_json({"type": "error", "error": {"message": str(exc)}})
         except Exception:  # noqa: BLE001
             pass
     finally:
@@ -284,6 +293,20 @@ async def voice_proxy(client_ws: WebSocket) -> None:
             await client_ws.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+@app.websocket("/ws/session")
+async def voice_session(client_ws: WebSocket) -> None:
+    """Primary interactive session endpoint used by the live lab UI."""
+    await client_ws.accept()
+    await _proxy_realtime(client_ws)
+
+
+@app.websocket("/ws/proxy")
+async def voice_proxy(client_ws: WebSocket) -> None:
+    """Alias kept for compatibility."""
+    await client_ws.accept()
+    await _proxy_realtime(client_ws)
 
 
 if __name__ == "__main__":

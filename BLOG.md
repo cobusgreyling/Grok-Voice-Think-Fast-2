@@ -170,24 +170,25 @@ Migration from OpenAI Realtime-style clients is mostly: change base URL to `api.
 
 ---
 
-## Hands-on companion demo
+## Hands-on companion lab
 
-This repository includes a small local playground:
+This repository ships an **interactive live lab** (not just a one-shot button):
 
-1. Text → speech turn against **`grok-voice-think-fast-2.0`**
-2. Measures **connect → first audio** and total duration
-3. Lets you toggle `reasoning.effort` (`high` | `none`) and voices
-4. Ships example prompts that stress multi-step reasoning and support-style dialogue
+1. **Persistent Realtime session** against **`grok-voice-think-fast-2.0`**
+2. **Streaming playback** as audio deltas arrive (hear it think-while-speaking)
+3. **Mic + server VAD** for auto turn-taking, plus barge-in / interrupt
+4. **Multi-turn chat log**, scenario personas, and live `session.update` (voice / reasoning / instructions)
+5. **Per-turn latency** (send → first audio) with a sparkline vs the **0.70s** lab reference
 
 ```bash
 cp .env.example .env   # set XAI_API_KEY
 ./run.sh
-# open http://127.0.0.1:7861
+# open http://127.0.0.1:7861 → Connect
 ```
 
-It is intentionally not a full-duplex mic client. The goal is a **reproducible latency + quality smoke test** you can run while writing or reviewing the article — the same pattern as the Nemotron embed “wow” demo: prove the claim in a browser in under a minute.
+The goal is the same as the Nemotron embed “wow” demos: prove the claim in a browser in under a minute — but this time as a **conversation**, not a single shot.
 
-For full duplex / WebRTC / telephony samples, use the official xAI cookbook agents.
+For production WebRTC / telephony samples, also see the official xAI cookbook agents.
 
 ---
 

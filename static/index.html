@@ -3,82 +3,157 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Grok Voice Think Fast 2.0</title>
+  <title>Grok Voice Think Fast 2.0 — Live Lab</title>
   <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
   <header class="hero">
     <img src="/static/header.jpg" alt="Grok Voice Think Fast 2.0" class="banner" onerror="this.style.display='none'" />
     <div class="hero-copy">
-      <p class="eyebrow">xAI · Speech-to-Speech</p>
+      <p class="eyebrow">xAI · Interactive Speech-to-Speech Lab</p>
       <h1>Grok Voice Think Fast 2.0</h1>
       <p class="sub">
-        Reasons while it speaks. <strong>0.70s</strong> first audio.
-        Better transcription, sharper conversation, fewer reasoning tokens.
+        Live multi-turn session. Stream audio as it thinks.
+        Toggle mic, change voice mid-session, and watch first-audio latency per turn.
       </p>
       <div class="badges">
         <span class="badge">model: <code id="modelName">…</code></span>
         <span class="badge" id="keyStatus">checking key…</span>
+        <span class="badge" id="connStatus">disconnected</span>
+        <span class="badge" id="turnStatus">idle</span>
       </div>
     </div>
   </header>
 
-  <main>
-    <section class="panel">
-      <div class="row">
-        <label for="voice">Voice</label>
-        <select id="voice">
-          <option value="eve">eve</option>
-          <option value="ara">ara</option>
-          <option value="rex">rex</option>
-          <option value="sal">sal</option>
-          <option value="leo">leo</option>
-        </select>
-
-        <label for="reasoning">Reasoning</label>
-        <select id="reasoning">
-          <option value="high" selected>high</option>
-          <option value="none">none</option>
-        </select>
+  <main class="layout">
+    <!-- LEFT: live stage -->
+    <section class="panel stage">
+      <div class="stage-top">
+        <div class="orb" id="orb" aria-hidden="true">
+          <div class="orb-ring"></div>
+          <div class="orb-core" id="orbCore">○</div>
+        </div>
+        <div class="stage-meta">
+          <h2>Live session</h2>
+          <p id="stageHint">Connect to start a persistent Realtime conversation.</p>
+          <canvas id="wave" width="640" height="72" aria-label="Audio waveform"></canvas>
+        </div>
       </div>
 
-      <label for="prompt">Say something (text → speech turn)</label>
-      <textarea id="prompt" rows="5" placeholder="Ask a multi-step question…"></textarea>
+      <div class="controls-row">
+        <button id="connectBtn" type="button">Connect</button>
+        <button id="micBtn" type="button" class="ghost" disabled title="Requires connected session">
+          🎙 Mic off
+        </button>
+        <button id="interruptBtn" type="button" class="ghost" disabled>Interrupt</button>
+        <button id="clearBtn" type="button" class="ghost" disabled>Clear chat</button>
+      </div>
+
+      <div class="composer">
+        <textarea
+          id="prompt"
+          rows="3"
+          placeholder="Type a message… Enter to send · Shift+Enter for newline"
+          disabled
+        ></textarea>
+        <div class="composer-actions">
+          <button id="sendBtn" type="button" disabled>Send</button>
+          <button id="stopAudioBtn" type="button" class="ghost" disabled>Stop audio</button>
+        </div>
+      </div>
 
       <div class="examples" id="examples"></div>
-
-      <div class="actions">
-        <button id="speakBtn" type="button">Speak</button>
-        <button id="stopBtn" type="button" class="ghost" disabled>Stop audio</button>
-      </div>
+      <div class="scenarios" id="scenarios"></div>
     </section>
 
-    <section class="panel metrics">
-      <h2>Latency</h2>
-      <div class="metric-grid">
-        <div>
-          <div class="metric-label">Connect → first audio</div>
-          <div class="metric-value" id="mFirst">—</div>
+    <!-- RIGHT: settings + metrics -->
+    <aside class="side">
+      <section class="panel">
+        <h2>Session</h2>
+        <div class="field">
+          <label for="voice">Voice</label>
+          <select id="voice">
+            <option value="eve">eve</option>
+            <option value="ara">ara</option>
+            <option value="rex">rex</option>
+            <option value="sal">sal</option>
+            <option value="leo">leo</option>
+          </select>
         </div>
-        <div>
-          <div class="metric-label">Connect → done</div>
-          <div class="metric-value" id="mDone">—</div>
+        <div class="field">
+          <label for="reasoning">Reasoning effort</label>
+          <select id="reasoning">
+            <option value="high" selected>high (smarter)</option>
+            <option value="none">none (faster / lighter)</option>
+          </select>
         </div>
-        <div>
-          <div class="metric-label">Audio duration</div>
-          <div class="metric-value" id="mDur">—</div>
+        <div class="field">
+          <label for="vad">Turn detection</label>
+          <select id="vad">
+            <option value="server_vad" selected>server VAD (auto)</option>
+            <option value="manual">manual (text / push-to-talk commit)</option>
+          </select>
         </div>
-      </div>
-      <p class="hint">
-        xAI reports <strong>0.70s</strong> time-to-first-audio on Artificial Analysis for Think Fast 2.0
-        (vs 1.25s on 1.0). Your local number includes network + cold session setup.
-      </p>
-    </section>
+        <div class="field">
+          <label for="instructions">System instructions</label>
+          <textarea id="instructions" rows="5">You are a sharp, concise voice assistant demoing Grok Voice Think Fast 2.0.
+Prefer short sentences. Ask one question at a time. No fluff.
+When the user role-plays a customer, stay in character as a helpful agent.</textarea>
+        </div>
+        <button id="applySessionBtn" type="button" class="ghost full" disabled>
+          Apply settings to live session
+        </button>
+        <p class="hint tight">
+          Voice / reasoning / instructions can be updated while connected via
+          <code>session.update</code>.
+        </p>
+      </section>
 
-    <section class="panel">
-      <h2>Transcript</h2>
-      <pre id="transcript" class="transcript">Waiting for a response…</pre>
+      <section class="panel metrics">
+        <h2>Latency (last turn)</h2>
+        <div class="metric-grid compact">
+          <div>
+            <div class="metric-label">Send → first audio</div>
+            <div class="metric-value" id="mFirst">—</div>
+          </div>
+          <div>
+            <div class="metric-label">Send → done</div>
+            <div class="metric-value" id="mDone">—</div>
+          </div>
+          <div>
+            <div class="metric-label">Turns</div>
+            <div class="metric-value" id="mTurns">0</div>
+          </div>
+          <div>
+            <div class="metric-label">Avg first audio</div>
+            <div class="metric-value" id="mAvg">—</div>
+          </div>
+        </div>
+        <div class="spark-wrap">
+          <canvas id="spark" width="400" height="56" aria-label="Latency history"></canvas>
+        </div>
+        <p class="hint tight">
+          Lab TTFA for 2.0 is <strong>0.70s</strong>. Your numbers include network + session.
+        </p>
+      </section>
+    </aside>
+
+    <!-- FULL WIDTH: conversation -->
+    <section class="panel chat-panel">
+      <div class="chat-head">
+        <h2>Conversation</h2>
+        <span class="live-dot" id="liveDot" hidden>LIVE</span>
+      </div>
+      <div id="chat" class="chat" aria-live="polite"></div>
       <div id="status" class="status"></div>
+    </section>
+
+    <section class="panel log-panel">
+      <div class="chat-head">
+        <h2>Event stream</h2>
+        <button id="toggleLogBtn" type="button" class="ghost tiny">Hide</button>
+      </div>
+      <pre id="eventLog" class="event-log"></pre>
     </section>
   </main>
 
@@ -87,8 +162,7 @@
     ·
     <a href="https://docs.x.ai/developers/model-capabilities/audio/voice-agent" target="_blank" rel="noopener">Docs</a>
     ·
-    <a href="/static/../" hidden></a>
-    <span>Companion demo for the article in <code>BLOG.md</code></span>
+    <span>Companion lab for <code>BLOG.md</code></span>
   </footer>
 
   <script src="/static/app.js"></script>

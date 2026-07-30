@@ -5,8 +5,8 @@
       "text": "I have three meetings: 9am, 11:30am, and 3pm. Each is 45 minutes. Can I fit a 90-minute deep-work block before lunch without overlapping anything? Walk me through it briefly."
     },
     {
-      "label": "Tool-style workflow",
-      "text": "Act as a support agent. A customer says their order 88421 never arrived, they paid on the 12th, and they want either a reship or a refund. Ask one clarifying question at a time."
+      "label": "One question at a time",
+      "text": "Help me troubleshoot why my home Wi‑Fi drops every evening. Ask me only one question at a time."
     },
     {
       "label": "Noisy real world",
@@ -15,6 +15,32 @@
     {
       "label": "Short & human",
       "text": "In one short sentence, what makes Think Fast 2.0 different from older voice models?"
+    },
+    {
+      "label": "Interrupt me",
+      "text": "Start explaining quantum entanglement in detail — I'll interrupt you."
+    }
+  ],
+  "scenarios": [
+    {
+      "label": "🎧 Support agent",
+      "instructions": "You are a calm customer-support agent for NovaShip logistics. Ask one clarifying question at a time. Confirm order details before offering reship or refund. Keep replies under three short sentences when possible.",
+      "starter": "Hi — my package never arrived and I need this fixed today."
+    },
+    {
+      "label": "📈 Sales coach",
+      "instructions": "You are a sharp B2B sales coach. Role-play a discovery call. Ask one high-leverage question at a time. Challenge weak answers politely. Keep energy high and concise.",
+      "starter": "I sell AI voice agents to contact centers. Help me practice discovery."
+    },
+    {
+      "label": "🧠 Reasoning stress",
+      "instructions": "You are a rigorous reasoning partner. Think carefully, but speak in short sentences. Show intermediate steps briefly. Prefer correct over theatrical.",
+      "starter": "A bat and ball cost $1.10. The bat costs $1 more than the ball. How much is the ball?"
+    },
+    {
+      "label": "🌍 Multilingual",
+      "instructions": "You are a multilingual concierge. Mirror the user's language. Keep answers short and practical. If they mix languages, follow their lead.",
+      "starter": "Hola — recomiéndame un plan de 2 días en Ciudad del Cabo."
     }
   ]
 }
